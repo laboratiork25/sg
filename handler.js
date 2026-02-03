@@ -138,114 +138,160 @@ async function processMessage(m, chatUpdate) {
     const stats = global.db.data.stats
     let usedPrefix
     
-    // ==================== GRUPPO METADATA CON DEBUG ====================
-    let groupMetadata = {}
-    let participants = []
-    let normalizedParticipants = []
+    // ==================== GRUPPO METADATA CON LID MAPPING ====================
+let groupMetadata = {}
+let participants = []
+let normalizedParticipants = []
+
+if (m.isGroup) {
+  const cached = global.groupMetaCache.get(m.chat)
+  if (cached && Date.now() - cached.timestamp < GROUP_META_CACHE_TTL) {
+    groupMetadata = cached.data
+  } else {
+    try {
+      groupMetadata = await this.groupMetadata(m.chat).catch(() => null) || {}
+      global.groupMetaCache.set(m.chat, {
+        data: groupMetadata,
+        timestamp: Date.now()
+      })
+    } catch {
+      groupMetadata = {}
+    }
+  }
+  
+  participants = groupMetadata.participants || []
+  
+  // DEBUG per comandi admin
+  const debugCommands = ['.on', '.off', '.status', '.antilink', '.welcome']
+  const shouldDebug = debugCommands.some(cmd => m.text.startsWith(cmd))
+  
+  if (shouldDebug) {
+    console.log('\n🔍 DEBUG ADMIN DETECTION:')
+    console.log('📋 Participants:', participants.length)
+    console.log('🤖 Bot JID:', this.user.jid)
+    console.log('👤 Sender:', m.sender)
+    console.log('\n📝 Primi 3 participants (RAW):')
+    participants.slice(0, 3).forEach((p, i) => {
+      console.log(`  ${i + 1}. ${p.id} - admin: ${p.admin}`)
+    })
+  }
+  
+  // ==================== CONVERTI LID → PHONE ====================
+  normalizedParticipants = participants.map(p => {
+    let normalizedId = this.decodeJid(p.id)
     
-    if (m.isGroup) {
-      const cached = global.groupMetaCache.get(m.chat)
-      if (cached && Date.now() - cached.timestamp < GROUP_META_CACHE_TTL) {
-        groupMetadata = cached.data
-      } else {
-        try {
-          groupMetadata = await this.groupMetadata(m.chat).catch(() => null) || {}
-          global.groupMetaCache.set(m.chat, {
-            data: groupMetadata,
-            timestamp: Date.now()
-          })
-        } catch {
-          groupMetadata = {}
+    // Se è LID, prova a convertire in phone number
+    if (normalizedId.includes('@lid')) {
+      const lidNum = normalizedId.split('@')[0]
+      
+      // Cerca nel contact store
+      if (this.contacts) {
+        for (const [jid, contact] of Object.entries(this.contacts)) {
+          if (jid.includes('@s.whatsapp.net')) {
+            const phoneNum = jid.split('@')[0]
+            
+            // Match per numero o LID
+            if (phoneNum === lidNum || contact?.lid === lidNum) {
+              normalizedId = jid
+              break
+            }
+          }
         }
       }
       
-      participants = groupMetadata.participants || []
-      
-      // DEBUG per comandi admin
-      const debugCommands = ['.on', '.off', '.status', '.antilink', '.welcome']
-      const shouldDebug = debugCommands.some(cmd => m.text.startsWith(cmd))
-      
-      if (shouldDebug) {
-        console.log('\n🔍 DEBUG ADMIN DETECTION:')
-        console.log('📋 Participants:', participants.length)
-        console.log('🤖 Bot JID:', this.user.jid)
-        console.log('👤 Sender:', m.sender)
-        console.log('\n📝 Primi 3 participants (RAW):')
-        participants.slice(0, 3).forEach((p, i) => {
-          console.log(`  ${i + 1}. ${p.id} - admin: ${p.admin}`)
+      // FALLBACK: usa groupMetadata.participants per trovare il vero JID
+      if (normalizedId.includes('@lid') && groupMetadata.id) {
+        // Cerca participant con stesso LID ma JID diverso
+        const altParticipant = participants.find(pp => {
+          const ppNum = pp.id.split('@')[0]
+          return ppNum === lidNum && !pp.id.includes('@lid')
         })
-      }
-      
-      // NORMALIZZA con decodeJid
-      normalizedParticipants = participants.map(u => {
-        const normalizedId = this.decodeJid(u.id)
-        return { ...u, id: normalizedId, jid: u.jid || normalizedId }
-      })
-      
-      if (shouldDebug) {
-        console.log('\n📝 Primi 3 participants (NORMALIZED):')
-        normalizedParticipants.slice(0, 3).forEach((p, i) => {
-          console.log(`  ${i + 1}. ${p.id} - admin: ${p.admin}`)
-        })
+        
+        if (altParticipant) {
+          normalizedId = this.decodeJid(altParticipant.id)
+        }
       }
     }
     
-    // NORMALIZZA bot JID e sender JID
-    const botJid = this.decodeJid(this.user.jid)
-    const senderJid = this.decodeJid(m.sender)
-    
-    // TROVA con JID normalizzati
-    let user_participant = normalizedParticipants.find(u => u.id === senderJid) || {}
-    let bot = normalizedParticipants.find(u => u.id === botJid) || {}
-    
-    // FALLBACK: Compara solo numeri se non trova
-    if (!bot.id && normalizedParticipants.length > 0) {
-      const botNum = botJid.split('@')[0].replace(/\D/g, '')
-      const botFallback = normalizedParticipants.find(u => {
-        const uNum = u.id.split('@')[0].replace(/\D/g, '')
-        return uNum === botNum
-      })
-      
-      if (botFallback) {
-        console.log('⚠️ Bot trovato con FALLBACK numero:', botFallback.id)
-        bot = botFallback
-      }
-    }
-    
-    if (!user_participant.id && normalizedParticipants.length > 0) {
-      const senderNum = senderJid.split('@')[0].replace(/\D/g, '')
-      const userFallback = normalizedParticipants.find(u => {
-        const uNum = u.id.split('@')[0].replace(/\D/g, '')
-        return uNum === senderNum
-      })
-      
-      if (userFallback) {
-        console.log('⚠️ User trovato con FALLBACK numero:', userFallback.id)
-        user_participant = userFallback
-      }
-    }
-    
-    const isAdmin = user_participant?.admin === 'admin' || user_participant?.admin === 'superadmin' || false
-    const isBotAdmin = bot?.admin === 'admin' || bot?.admin === 'superadmin' || false
-    
-    // DEBUG risultato
-    const debugCommands = ['.on', '.off', '.status', '.antilink', '.welcome']
-    const shouldDebug = debugCommands.some(cmd => m.text.startsWith(cmd))
-    
-    if (shouldDebug) {
-      console.log('\n✅ RISULTATO FINALE:')
-      console.log('👤 User trovato:', user_participant.id || '❌ NON TROVATO')
-      console.log('   Admin status:', user_participant.admin || 'null')
-      console.log('   isAdmin:', isAdmin)
-      console.log('')
-      console.log('🤖 Bot trovato:', bot.id || '❌ NON TROVATO')
-      console.log('   Admin status:', bot.admin || 'null')
-      console.log('   isBotAdmin:', isBotAdmin)
-      console.log('─────────────────────────────\n')
-    }
-    
-    m.isAdmin = isAdmin
-    m.isBotAdmin = isBotAdmin
+    return { ...p, id: normalizedId, jid: p.jid || normalizedId, originalLid: p.id }
+  })
+  
+  if (shouldDebug) {
+    console.log('\n📝 Primi 3 participants (CONVERTED):')
+    normalizedParticipants.slice(0, 3).forEach((p, i) => {
+      const converted = p.originalLid !== p.id ? `(era ${p.originalLid})` : ''
+      console.log(`  ${i + 1}. ${p.id} ${converted} - admin: ${p.admin}`)
+    })
+  }
+}
+
+// NORMALIZZA bot JID e sender JID
+const botJid = this.decodeJid(this.user.jid)
+const senderJid = this.decodeJid(m.sender)
+
+if (shouldDebug) {
+  console.log('\n🔎 RICERCA:')
+  console.log('Bot JID normalizzato:', botJid)
+  console.log('Sender JID normalizzato:', senderJid)
+}
+
+// TROVA con JID normalizzati
+let user_participant = normalizedParticipants.find(u => u.id === senderJid) || {}
+let bot = normalizedParticipants.find(u => u.id === botJid) || {}
+
+// FALLBACK 1: Compara solo numeri
+if (!bot.id && normalizedParticipants.length > 0) {
+  const botNum = botJid.split('@')[0].replace(/\D/g, '')
+  const botFallback = normalizedParticipants.find(u => {
+    const uNum = u.id.split('@')[0].replace(/\D/g, '')
+    return uNum === botNum
+  })
+  
+  if (botFallback) {
+    if (shouldDebug) console.log('⚠️ Bot trovato con FALLBACK numero')
+    bot = botFallback
+  }
+}
+
+if (!user_participant.id && normalizedParticipants.length > 0) {
+  const senderNum = senderJid.split('@')[0].replace(/\D/g, '')
+  const userFallback = normalizedParticipants.find(u => {
+    const uNum = u.id.split('@')[0].replace(/\D/g, '')
+    return uNum === senderNum
+  })
+  
+  if (userFallback) {
+    if (shouldDebug) console.log('⚠️ User trovato con FALLBACK numero')
+    user_participant = userFallback
+  }
+}
+
+// FALLBACK 2: Se ancora non trova, forza match owner
+if (!user_participant.id && isOwner) {
+  if (shouldDebug) console.log('⚠️ User è OWNER - forzo admin=true')
+  user_participant = { id: senderJid, admin: 'superadmin' }
+}
+
+const isAdmin = user_participant?.admin === 'admin' || user_participant?.admin === 'superadmin' || isOwner
+const isBotAdmin = bot?.admin === 'admin' || bot?.admin === 'superadmin' || false
+
+// DEBUG risultato
+if (shouldDebug) {
+  console.log('\n✅ RISULTATO FINALE:')
+  console.log('👤 User trovato:', user_participant.id || '❌ NON TROVATO')
+  console.log('   Admin status:', user_participant.admin || 'null')
+  console.log('   isAdmin:', isAdmin)
+  console.log('   isOwner:', isOwner)
+  console.log('')
+  console.log('🤖 Bot trovato:', bot.id || '❌ NON TROVATO')
+  console.log('   Admin status:', bot.admin || 'null')
+  console.log('   isBotAdmin:', isBotAdmin)
+  console.log('─────────────────────────────\n')
+}
+
+m.isAdmin = isAdmin
+m.isBotAdmin = isBotAdmin
+
     
     const ___dirname = path.join(path.dirname(fileURLToPath(import.meta.url)), './plugins')
     
