@@ -11,7 +11,6 @@ const delay = ms => isNumber(ms) && new Promise(resolve => setTimeout(resolve, m
 // ==================== CACHE GLOBALI ====================
 if (!global.processedMessages) global.processedMessages = new Set()
 if (!global.groupMetaCache) global.groupMetaCache = new Map()
-if (!global.jidCache) global.jidCache = new Map()
 
 const DUPLICATE_WINDOW = 3000
 const GROUP_META_CACHE_TTL = 300000
@@ -46,11 +45,7 @@ export async function handler(chatUpdate) {
   m = smsg(this, m) || m
   if (!m) return
   
-  // ==================== FILTRI ULTRA-VELOCI ====================
-  if (m.fromMe) return
-  if (m.key?.participant?.includes(':')) return
-  
-  // Normalizza JID una volta sola
+  // Normalizza JID
   if (m.key) {
     m.key.remoteJid = this.decodeJid(m.key.remoteJid)
     if (m.key.participant) m.key.participant = this.decodeJid(m.key.participant)
@@ -64,7 +59,8 @@ export async function handler(chatUpdate) {
 async function processMessage(m, chatUpdate) {
   const isOwner = (() => {
     try {
-      const owners = [this.decodeJid(this.user.jid), ...((global.owner || []).map(([num]) => num + '@s.whatsapp.net'))]
+      if (!global.owner) global.owner = []
+      const owners = [this.decodeJid(this.user.jid), ...global.owner.map(([num]) => num + '@s.whatsapp.net')]
       return owners.includes(m.sender) || m.fromMe
     } catch {
       return false
@@ -74,7 +70,7 @@ async function processMessage(m, chatUpdate) {
   try {
     m.exp = 0
     
-    // ==================== INIT DB VELOCE ====================
+    // ==================== INIT DB ====================
     if (!global.db.data.users) global.db.data.users = {}
     if (!global.db.data.chats) global.db.data.chats = {}
     if (!global.db.data.stats) global.db.data.stats = {}
@@ -119,179 +115,61 @@ async function processMessage(m, chatUpdate) {
       }
     }
     
-    // ==================== FILTRO COMANDO ULTRA-VELOCE ====================
-    if (typeof m.text !== 'string') m.text = ''
-    
-    const isCommand = m.text && /^[.!#]/.test(m.text)
-    
-    // Se NON è comando, aggiorna solo contatori e ESCI
-    if (!isCommand) {
-      user.messages++
-      return
-    }
-    // ==================== FINE FILTRO ====================
-    
     if (global.opts?.['nyimak']) return
     if (!m.fromMe && global.opts?.['self']) return
     if (m.isBaileys) return
     
+    if (typeof m.text !== 'string') m.text = ''
+    
     const stats = global.db.data.stats
     let usedPrefix
     
-    // ==================== GRUPPO METADATA CON LID MAPPING ====================
-let groupMetadata = {}
-let participants = []
-let normalizedParticipants = []
-
-if (m.isGroup) {
-  const cached = global.groupMetaCache.get(m.chat)
-  if (cached && Date.now() - cached.timestamp < GROUP_META_CACHE_TTL) {
-    groupMetadata = cached.data
-  } else {
-    try {
-      groupMetadata = await this.groupMetadata(m.chat).catch(() => null) || {}
-      global.groupMetaCache.set(m.chat, {
-        data: groupMetadata,
-        timestamp: Date.now()
-      })
-    } catch {
-      groupMetadata = {}
-    }
-  }
-  
-  participants = groupMetadata.participants || []
-  
-  // DEBUG per comandi admin
-  const debugCommands = ['.on', '.off', '.status', '.antilink', '.welcome']
-  const shouldDebug = debugCommands.some(cmd => m.text.startsWith(cmd))
-  
-  if (shouldDebug) {
-    console.log('\n🔍 DEBUG ADMIN DETECTION:')
-    console.log('📋 Participants:', participants.length)
-    console.log('🤖 Bot JID:', this.user.jid)
-    console.log('👤 Sender:', m.sender)
-    console.log('\n📝 Primi 3 participants (RAW):')
-    participants.slice(0, 3).forEach((p, i) => {
-      console.log(`  ${i + 1}. ${p.id} - admin: ${p.admin}`)
-    })
-  }
-  
-  // ==================== CONVERTI LID → PHONE ====================
-  normalizedParticipants = participants.map(p => {
-    let normalizedId = this.decodeJid(p.id)
-    
-    // Se è LID, prova a convertire in phone number
-    if (normalizedId.includes('@lid')) {
-      const lidNum = normalizedId.split('@')[0]
-      
-      // Cerca nel contact store
-      if (this.contacts) {
-        for (const [jid, contact] of Object.entries(this.contacts)) {
-          if (jid.includes('@s.whatsapp.net')) {
-            const phoneNum = jid.split('@')[0]
-            
-            // Match per numero o LID
-            if (phoneNum === lidNum || contact?.lid === lidNum) {
-              normalizedId = jid
-              break
-            }
-          }
-        }
-      }
-      
-      // FALLBACK: usa groupMetadata.participants per trovare il vero JID
-      if (normalizedId.includes('@lid') && groupMetadata.id) {
-        // Cerca participant con stesso LID ma JID diverso
-        const altParticipant = participants.find(pp => {
-          const ppNum = pp.id.split('@')[0]
-          return ppNum === lidNum && !pp.id.includes('@lid')
-        })
-        
-        if (altParticipant) {
-          normalizedId = this.decodeJid(altParticipant.id)
+    // ==================== GRUPPO METADATA (LOGICA VECCHIA FUNZIONANTE) ====================
+    let groupMetadata = {}
+    if (m.isGroup) {
+      const cached = global.groupMetaCache.get(m.chat)
+      if (cached && Date.now() - cached.timestamp < GROUP_META_CACHE_TTL) {
+        groupMetadata = cached.data
+      } else {
+        try {
+          groupMetadata = ((this.chats[m.chat] || {}).metadata || await this.groupMetadata(m.chat).catch(_ => null)) || {}
+          global.groupMetaCache.set(m.chat, {
+            data: groupMetadata,
+            timestamp: Date.now()
+          })
+        } catch {
+          groupMetadata = {}
         }
       }
     }
     
-    return { ...p, id: normalizedId, jid: p.jid || normalizedId, originalLid: p.id }
-  })
-  
-  if (shouldDebug) {
-    console.log('\n📝 Primi 3 participants (CONVERTED):')
-    normalizedParticipants.slice(0, 3).forEach((p, i) => {
-      const converted = p.originalLid !== p.id ? `(era ${p.originalLid})` : ''
-      console.log(`  ${i + 1}. ${p.id} ${converted} - admin: ${p.admin}`)
+    const participants = (m.isGroup ? groupMetadata.participants : []) || []
+    const normalizedParticipants = participants.map(u => {
+      const normalizedId = this.decodeJid(u.id)
+      return { ...u, id: normalizedId, jid: u.jid || normalizedId }
     })
-  }
-}
-
-// NORMALIZZA bot JID e sender JID
-const botJid = this.decodeJid(this.user.jid)
-const senderJid = this.decodeJid(m.sender)
-
-if (shouldDebug) {
-  console.log('\n🔎 RICERCA:')
-  console.log('Bot JID normalizzato:', botJid)
-  console.log('Sender JID normalizzato:', senderJid)
-}
-
-// TROVA con JID normalizzati
-let user_participant = normalizedParticipants.find(u => u.id === senderJid) || {}
-let bot = normalizedParticipants.find(u => u.id === botJid) || {}
-
-// FALLBACK 1: Compara solo numeri
-if (!bot.id && normalizedParticipants.length > 0) {
-  const botNum = botJid.split('@')[0].replace(/\D/g, '')
-  const botFallback = normalizedParticipants.find(u => {
-    const uNum = u.id.split('@')[0].replace(/\D/g, '')
-    return uNum === botNum
-  })
-  
-  if (botFallback) {
-    if (shouldDebug) console.log('⚠️ Bot trovato con FALLBACK numero')
-    bot = botFallback
-  }
-}
-
-if (!user_participant.id && normalizedParticipants.length > 0) {
-  const senderNum = senderJid.split('@')[0].replace(/\D/g, '')
-  const userFallback = normalizedParticipants.find(u => {
-    const uNum = u.id.split('@')[0].replace(/\D/g, '')
-    return uNum === senderNum
-  })
-  
-  if (userFallback) {
-    if (shouldDebug) console.log('⚠️ User trovato con FALLBACK numero')
-    user_participant = userFallback
-  }
-}
-
-// FALLBACK 2: Se ancora non trova, forza match owner
-if (!user_participant.id && isOwner) {
-  if (shouldDebug) console.log('⚠️ User è OWNER - forzo admin=true')
-  user_participant = { id: senderJid, admin: 'superadmin' }
-}
-
-const isAdmin = user_participant?.admin === 'admin' || user_participant?.admin === 'superadmin' || isOwner
-const isBotAdmin = bot?.admin === 'admin' || bot?.admin === 'superadmin' || false
-
-// DEBUG risultato
-if (shouldDebug) {
-  console.log('\n✅ RISULTATO FINALE:')
-  console.log('👤 User trovato:', user_participant.id || '❌ NON TROVATO')
-  console.log('   Admin status:', user_participant.admin || 'null')
-  console.log('   isAdmin:', isAdmin)
-  console.log('   isOwner:', isOwner)
-  console.log('')
-  console.log('🤖 Bot trovato:', bot.id || '❌ NON TROVATO')
-  console.log('   Admin status:', bot.admin || 'null')
-  console.log('   isBotAdmin:', isBotAdmin)
-  console.log('─────────────────────────────\n')
-}
-
-m.isAdmin = isAdmin
-m.isBotAdmin = isBotAdmin
-
+    const user_participant = (m.isGroup ? normalizedParticipants.find(u => this.decodeJid(u.id) === m.sender) : {}) || {}
+    const bot = (m.isGroup ? normalizedParticipants.find(u => this.decodeJid(u.id) == this.user.jid) : {}) || {}
+    
+    // Funzione isUserAdmin (ORIGINALE FUNZIONANTE)
+    async function isUserAdmin(conn, chatId, senderId) {
+      try {
+        const decodedSender = conn.decodeJid(senderId)
+        return groupMetadata?.participants?.some(p =>
+          (conn.decodeJid(p.id) === decodedSender || p.jid === decodedSender) &&
+          (p.admin === 'admin' || p.admin === 'superadmin')
+        ) || false
+      } catch {
+        return false
+      }
+    }
+    
+    const isRAdmin = user_participant?.admin == 'superadmin' || false
+    const isAdmin = m.isGroup ? await isUserAdmin(this, m.chat, m.sender) : false
+    const isBotAdmin = m.isGroup ? await isUserAdmin(this, m.chat, this.user.jid) : false
+    
+    m.isAdmin = isAdmin
+    m.isBotAdmin = isBotAdmin
     
     const ___dirname = path.join(path.dirname(fileURLToPath(import.meta.url)), './plugins')
     
@@ -466,7 +344,7 @@ m.isBotAdmin = isBotAdmin
       let user = global.db.data.users[m.sender]
       if (user) {
         user.exp = (user.exp || 0) + m.exp
-        user.messages++
+        user.messages = (user.messages || 0) + 1
       }
     }
     
@@ -490,7 +368,7 @@ m.isBotAdmin = isBotAdmin
       }
     }
     
-    // Print console (opzionale)
+    // Print console
     try {
       if (!global.opts?.['noprint']) {
         await (await import('./lib/print.js')).default(m, this)
