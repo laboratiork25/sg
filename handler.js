@@ -138,7 +138,7 @@ async function processMessage(m, chatUpdate) {
     const stats = global.db.data.stats
     let usedPrefix
     
-    // ==================== GRUPPO METADATA CON CACHE ====================
+    // ==================== GRUPPO METADATA CON DEBUG ====================
     let groupMetadata = {}
     let participants = []
     let normalizedParticipants = []
@@ -160,17 +160,89 @@ async function processMessage(m, chatUpdate) {
       }
       
       participants = groupMetadata.participants || []
+      
+      // DEBUG per comandi admin
+      const debugCommands = ['.on', '.off', '.status', '.antilink', '.welcome']
+      const shouldDebug = debugCommands.some(cmd => m.text.startsWith(cmd))
+      
+      if (shouldDebug) {
+        console.log('\n🔍 DEBUG ADMIN DETECTION:')
+        console.log('📋 Participants:', participants.length)
+        console.log('🤖 Bot JID:', this.user.jid)
+        console.log('👤 Sender:', m.sender)
+        console.log('\n📝 Primi 3 participants (RAW):')
+        participants.slice(0, 3).forEach((p, i) => {
+          console.log(`  ${i + 1}. ${p.id} - admin: ${p.admin}`)
+        })
+      }
+      
+      // NORMALIZZA con decodeJid
       normalizedParticipants = participants.map(u => {
         const normalizedId = this.decodeJid(u.id)
         return { ...u, id: normalizedId, jid: u.jid || normalizedId }
       })
+      
+      if (shouldDebug) {
+        console.log('\n📝 Primi 3 participants (NORMALIZED):')
+        normalizedParticipants.slice(0, 3).forEach((p, i) => {
+          console.log(`  ${i + 1}. ${p.id} - admin: ${p.admin}`)
+        })
+      }
     }
     
-    const user_participant = normalizedParticipants.find(u => u.id === m.sender) || {}
-    const bot = normalizedParticipants.find(u => u.id === this.user.jid) || {}
+    // NORMALIZZA bot JID e sender JID
+    const botJid = this.decodeJid(this.user.jid)
+    const senderJid = this.decodeJid(m.sender)
+    
+    // TROVA con JID normalizzati
+    let user_participant = normalizedParticipants.find(u => u.id === senderJid) || {}
+    let bot = normalizedParticipants.find(u => u.id === botJid) || {}
+    
+    // FALLBACK: Compara solo numeri se non trova
+    if (!bot.id && normalizedParticipants.length > 0) {
+      const botNum = botJid.split('@')[0].replace(/\D/g, '')
+      const botFallback = normalizedParticipants.find(u => {
+        const uNum = u.id.split('@')[0].replace(/\D/g, '')
+        return uNum === botNum
+      })
+      
+      if (botFallback) {
+        console.log('⚠️ Bot trovato con FALLBACK numero:', botFallback.id)
+        bot = botFallback
+      }
+    }
+    
+    if (!user_participant.id && normalizedParticipants.length > 0) {
+      const senderNum = senderJid.split('@')[0].replace(/\D/g, '')
+      const userFallback = normalizedParticipants.find(u => {
+        const uNum = u.id.split('@')[0].replace(/\D/g, '')
+        return uNum === senderNum
+      })
+      
+      if (userFallback) {
+        console.log('⚠️ User trovato con FALLBACK numero:', userFallback.id)
+        user_participant = userFallback
+      }
+    }
     
     const isAdmin = user_participant?.admin === 'admin' || user_participant?.admin === 'superadmin' || false
     const isBotAdmin = bot?.admin === 'admin' || bot?.admin === 'superadmin' || false
+    
+    // DEBUG risultato
+    const debugCommands = ['.on', '.off', '.status', '.antilink', '.welcome']
+    const shouldDebug = debugCommands.some(cmd => m.text.startsWith(cmd))
+    
+    if (shouldDebug) {
+      console.log('\n✅ RISULTATO FINALE:')
+      console.log('👤 User trovato:', user_participant.id || '❌ NON TROVATO')
+      console.log('   Admin status:', user_participant.admin || 'null')
+      console.log('   isAdmin:', isAdmin)
+      console.log('')
+      console.log('🤖 Bot trovato:', bot.id || '❌ NON TROVATO')
+      console.log('   Admin status:', bot.admin || 'null')
+      console.log('   isBotAdmin:', isBotAdmin)
+      console.log('─────────────────────────────\n')
+    }
     
     m.isAdmin = isAdmin
     m.isBotAdmin = isBotAdmin
@@ -340,7 +412,7 @@ async function processMessage(m, chatUpdate) {
       }
       break
     }
-    } catch (e) {
+  } catch (e) {
     console.error('[handler]', e)
   } finally {
     // Update stats
@@ -385,7 +457,6 @@ async function processMessage(m, chatUpdate) {
     }
   }
 }
-
 
 // ==================== PARTICIPANTS UPDATE ====================
 export async function participantsUpdate({ id, participants, action }) {
