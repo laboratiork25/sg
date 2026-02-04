@@ -11,7 +11,7 @@ const delay = ms => isNumber(ms) && new Promise(resolve => setTimeout(resolve, m
 // ==================== CACHE ULTRA-OTTIMIZZATE ====================
 if (!global.processedMessages) global.processedMessages = new Set()
 if (!global.groupMetaCache) global.groupMetaCache = new Map()
-if (!global.adminCheckCache) global.adminCheckCache = new Map()  
+if (!global.adminCheckCache) global.adminCheckCache = new Map() // NUOVO: cache admin check
 
 const DUPLICATE_WINDOW = 3000
 const GROUP_META_CACHE_TTL = 600000 // 10 min (era 5)
@@ -630,6 +630,7 @@ export async function groupsUpdate(groupsUpdate) {
   }
 }
 
+// ==================== DFAIL ====================
 global.dfail = (type, m, conn) => {
   const msg = {
     owner: 'ㅤㅤ⋆｡˚『 🛡️ ╭ `PERMESSO NEGATO` ╯ 』˚｡⋆\n\n『 ⚠️ 』Questo comando è riservato agli *owner* del bot\n\n> Solo i proprietari possono eseguire questa azione',
