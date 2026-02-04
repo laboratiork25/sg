@@ -1,14 +1,16 @@
 const { proto, generateWAMessage, areJidsSameUser } = (await import('@whiskeysockets/baileys')).default
 
-export async function all(m, chatUpdate) {
+const handler = async (m, { conn }) => {
+  // Questo handler non fa nulla, viene usato solo per il .before
+  return true
+}
+
+handler.before = async function(m, { conn }) {
   if (m.isBaileys) return
   if (!m.message) return
   
-  if (!(m.message.buttonsResponseMessage || m.message.templateButtonReplyMessage || m.message.listResponseMessage || m.message.interactiveResponseMessage)) {
-    return
-  }
-  
   let id
+  
   if (m.message.buttonsResponseMessage) {
     id = m.message.buttonsResponseMessage.selectedButtonId
   } else if (m.message.templateButtonReplyMessage) {
@@ -28,31 +30,20 @@ export async function all(m, chatUpdate) {
   console.log('🔘 Bottone premuto:', id)
   
   try {
-    const fakeMsg = {
-      key: {
-        remoteJid: m.chat,
-        fromMe: false,
-        id: `FAKE-${Date.now()}`,
-        participant: m.sender
-      },
-      message: {
-        conversation: id,
-        extendedTextMessage: {
-          text: id
-        }
-      },
-      messageTimestamp: Math.floor(Date.now() / 1000),
-      pushName: m.pushName || m.name,
-      participant: m.sender
+    // Modifica il messaggio per far sembrare che l'utente ha digitato il comando
+    m.text = id
+    m.message = {
+      extendedTextMessage: {
+        text: id
+      }
     }
     
-    console.log('📤 Emissione comando:', id)
+    console.log('📤 Comando elaborato:', id)
+    // Non ritornare nulla per far continuare l'elaborazione
     
-    this.ev.emit('messages.upsert', {
-      messages: [fakeMsg],
-      type: 'notify'
-    })
   } catch (error) {
-    console.error('❌ Errore trasformazione bottone:', error)
+    console.error('❌ Errore elaborazione bottone:', error)
   }
 }
+
+export default handler

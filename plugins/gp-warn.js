@@ -4,7 +4,6 @@ const handler = async (m, { conn, text, command, usedPrefix, isBotAdmin }) => {
             return m.reply('🤖 *BOT NON ADMIN*\n\nIl bot deve essere admin per usare questo comando.');
         }
         
-        // Prendi target da mention o quoted
         const mention = m.mentionedJid && m.mentionedJid[0] ? m.mentionedJid[0] : m.quoted ? m.quoted.sender : null;
         
         if (!mention) {
@@ -13,18 +12,15 @@ const handler = async (m, { conn, text, command, usedPrefix, isBotAdmin }) => {
         
         const target = mention;
         
-        // Check bot
         if (target === conn.user.jid) {
             return m.reply('🤖 *Non puoi warnare il bot!*');
         }
         
-        // Check owner
         const ownerBot = global.owner[0][0] + '@s.whatsapp.net';
         if (target === ownerBot) {
             return m.reply('🛡️ *Non puoi warnare gli owner!*');
         }
         
-        // Check se è admin
         const groupMetadata = conn.chats[m.chat]?.metadata || await conn.groupMetadata(m.chat);
         const participants = groupMetadata?.participants || [];
         const utente = participants.find(u => conn.decodeJid(u.id) === target);
@@ -33,7 +29,6 @@ const handler = async (m, { conn, text, command, usedPrefix, isBotAdmin }) => {
             return m.reply('👑 *Non puoi warnare gli admin!*');
         }
         
-        // Estrai motivo dal text
         const reason = text ? text.replace(/@\d+/g, '').trim() : 'Non specificato';
 
         const user = getUserData(target);
@@ -101,7 +96,6 @@ async function handleRemoval(conn, m, target) {
         mentions: [target]
     }, { quoted: m });
     
-    // Kick usando lo stesso metodo del plugin kick
     await conn.groupParticipantsUpdate(m.chat, [target], 'remove');
 }
 

@@ -8,42 +8,87 @@ import chalk from 'chalk'
 const isNumber = x => typeof x === 'number' && !isNaN(x)
 const delay = ms => isNumber(ms) && new Promise(resolve => setTimeout(resolve, ms))
 
-// ==================== CACHE GLOBALI ====================
+// ==================== CACHE ULTRA-OTTIMIZZATE ====================
 if (!global.processedMessages) global.processedMessages = new Set()
 if (!global.groupMetaCache) global.groupMetaCache = new Map()
+if (!global.adminCheckCache) global.adminCheckCache = new Map()  
 
 const DUPLICATE_WINDOW = 3000
-const GROUP_META_CACHE_TTL = 300000
+const GROUP_META_CACHE_TTL = 600000 // 10 min (era 5)
+const ADMIN_CHECK_CACHE_TTL = 300000 // 5 min cache admin
 
-// Auto-save database ogni 10 minuti
-if (!global.dbSaveInterval) {
-  global.dbSaveInterval = setInterval(() => {
-    if (global.db?.write) global.db.write().catch(() => {})
-  }, 10 * 60 * 1000)
+// Cleanup aggressivo ogni 20 min
+if (!global.cacheCleanupInterval) {
+  global.cacheCleanupInterval = setInterval(() => {
+    const now = Date.now()
+    
+    // Cleanup group metadata
+    for (const [key, value] of global.groupMetaCache.entries()) {
+      if (now - value.timestamp > GROUP_META_CACHE_TTL) {
+        global.groupMetaCache.delete(key)
+      }
+    }
+    
+    // Cleanup admin cache
+    for (const [key, value] of global.adminCheckCache.entries()) {
+      if (now - value.timestamp > ADMIN_CHECK_CACHE_TTL) {
+        global.adminCheckCache.delete(key)
+      }
+    }
+    
+    // Cleanup processed messages
+    if (global.processedMessages.size > 15000) {
+      global.processedMessages.clear()
+    }
+  }, 20 * 60 * 1000)
 }
 
-// ==================== HANDLER PRINCIPALE ====================
+// DB save throttled
+if (!global.dbSaveInterval) {
+  let saveTimeout = null
+  global.triggerDBSave = () => {
+    clearTimeout(saveTimeout)
+    saveTimeout = setTimeout(() => {
+      if (global.db?.write) global.db.write().catch(() => {})
+    }, 30000) // 30s throttle
+  }
+}
+
+// ==================== HANDLER PRINCIPALE ULTRA-VELOCE ====================
 export async function handler(chatUpdate) {
   this.msgqueque = this.msgqueque || []
   if (!chatUpdate) return
   
-  this.pushMessage(chatUpdate.messages).catch(() => {})
+  // Push message non-blocking
+  if (typeof this.pushMessage === 'function') {
+    setImmediate(() => this.pushMessage(chatUpdate.messages).catch(() => {}))
+  }
+  
   let m = chatUpdate.messages[chatUpdate.messages.length - 1]
   if (!m) return
   
-  // Deduplica messaggi
+  // ULTRA-FAST: Early exits PRIMA di tutto
+  if (m.messageStubType) return
+  if (m.key?.fromMe && !m.message) return
+  
   const msgId = m.key?.id
   if (!msgId) return
   if (global.processedMessages.has(msgId)) return
   global.processedMessages.add(msgId)
   setTimeout(() => global.processedMessages.delete(msgId), DUPLICATE_WINDOW)
   
-  // Lazy load DB
-  if (!global.db?.data) await global.loadDatabase()
+  // DB load non-blocking
+  if (!global.db?.data) {
+    setImmediate(() => global.loadDatabase())
+    return
+  }
   
-  // Normalizza messaggio
+  // Normalizza VELOCE
   m = smsg(this, m) || m
   if (!m) return
+  
+  // Skip messaggi vecchi
+  if (m.messageTimestamp && (Date.now() / 1000 - m.messageTimestamp) > 120) return
   
   // Normalizza JID
   if (m.key) {
@@ -52,10 +97,14 @@ export async function handler(chatUpdate) {
   }
   if (!m.key?.remoteJid) return
   
-  await processMessage.call(this, m, chatUpdate)
+  // Skip messaggi privati senza comando
+  if (!m.isGroup && typeof m.text === 'string' && !m.text.match(/^[.!#/]/)) return
+  
+  // Process NON-BLOCKING
+  setImmediate(() => processMessage.call(this, m, chatUpdate))
 }
 
-// ==================== PROCESS MESSAGE ====================
+// ==================== PROCESS MESSAGE ULTRA-OTTIMIZZATO ====================
 async function processMessage(m, chatUpdate) {
   const isOwner = (() => {
     try {
@@ -70,14 +119,16 @@ async function processMessage(m, chatUpdate) {
   try {
     m.exp = 0
     
-    // ==================== INIT DB ====================
+    // Init DB structures LAZY
     if (!global.db.data.users) global.db.data.users = {}
     if (!global.db.data.chats) global.db.data.chats = {}
     if (!global.db.data.stats) global.db.data.stats = {}
     if (!global.db.data.settings) global.db.data.settings = {}
     
+    const isCommand = typeof m.text === 'string' && m.text.match(/^[.!#]/)
+    
     let user = global.db.data.users[m.sender]
-    if (!user) {
+    if (!user && isCommand) {
       user = global.db.data.users[m.sender] = {
         name: m.name || m.pushName || 'User',
         banned: false,
@@ -86,9 +137,10 @@ async function processMessage(m, chatUpdate) {
     }
     
     let chat = global.db.data.chats[m.chat]
-    if (!chat) {
+    if (!chat && isCommand) {
+      // VELOCE: No getName async
       chat = global.db.data.chats[m.chat] = {
-        name: m.isGroup ? await this.getName(m.chat) : m.name,
+        name: m.isGroup ? (this.chats[m.chat]?.name || 'Group') : (m.name || 'Chat'),
         isBanned: false,
         welcome: false,
         detect: false,
@@ -115,78 +167,121 @@ async function processMessage(m, chatUpdate) {
       }
     }
     
+    // Early exits
     if (global.opts?.['nyimak']) return
     if (!m.fromMe && global.opts?.['self']) return
     if (m.isBaileys) return
+    if (user?.banned && !isOwner) return
+    if (chat?.isBanned && !isOwner) return
     
     if (typeof m.text !== 'string') m.text = ''
     
     const stats = global.db.data.stats
     let usedPrefix
     
-    // ==================== GRUPPO METADATA (LOGICA VECCHIA FUNZIONANTE) ====================
+    // ==================== METADATA ULTRA-VELOCE ====================
     let groupMetadata = {}
+    let participants = []
+    let normalizedParticipants = []
+    
     if (m.isGroup) {
+      // VELOCE: Usa SEMPRE cache o memoria
       const cached = global.groupMetaCache.get(m.chat)
+      
       if (cached && Date.now() - cached.timestamp < GROUP_META_CACHE_TTL) {
         groupMetadata = cached.data
       } else {
-        try {
-          groupMetadata = ((this.chats[m.chat] || {}).metadata || await this.groupMetadata(m.chat).catch(_ => null)) || {}
+        // FALLBACK: metadata da memoria (ZERO latenza)
+        groupMetadata = this.chats[m.chat]?.metadata || {}
+        
+        // Fetch async solo se necessario (non-blocking)
+        if (!groupMetadata.participants || groupMetadata.participants.length === 0) {
+          setImmediate(async () => {
+            try {
+              const freshMeta = await this.groupMetadata(m.chat)
+              global.groupMetaCache.set(m.chat, {
+                data: freshMeta,
+                timestamp: Date.now()
+              })
+            } catch {}
+          })
+        } else {
+          // Cache existing metadata
           global.groupMetaCache.set(m.chat, {
             data: groupMetadata,
             timestamp: Date.now()
           })
-        } catch {
-          groupMetadata = {}
         }
+      }
+      
+      participants = groupMetadata.participants || []
+      
+      // Normalizza solo se serve
+      if (isCommand && participants.length > 0) {
+        normalizedParticipants = participants.map(u => {
+          const normalizedId = this.decodeJid(u.id)
+          return { ...u, id: normalizedId, jid: u.jid || normalizedId }
+        })
       }
     }
     
-    const participants = (m.isGroup ? groupMetadata.participants : []) || []
-    const normalizedParticipants = participants.map(u => {
-      const normalizedId = this.decodeJid(u.id)
-      return { ...u, id: normalizedId, jid: u.jid || normalizedId }
-    })
-    const user_participant = (m.isGroup ? normalizedParticipants.find(u => this.decodeJid(u.id) === m.sender) : {}) || {}
-    const bot = (m.isGroup ? normalizedParticipants.find(u => this.decodeJid(u.id) == this.user.jid) : {}) || {}
+    const user_participant = m.isGroup && normalizedParticipants.length > 0 ? normalizedParticipants.find(u => this.decodeJid(u.id) === m.sender) || {} : {}
+    const bot = m.isGroup && normalizedParticipants.length > 0 ? normalizedParticipants.find(u => this.decodeJid(u.id) == this.user.jid) || {} : {}
     
-    // Funzione isUserAdmin (ORIGINALE FUNZIONANTE)
-    async function isUserAdmin(conn, chatId, senderId) {
+    // ==================== ADMIN CHECK CON CACHE (ORIGINALE) ====================
+    function isUserAdminSync(conn, participants, senderId) {
       try {
+        // CACHE KEY
+        const cacheKey = `${m.chat}:${senderId}`
+        const cached = global.adminCheckCache.get(cacheKey)
+        
+        if (cached && Date.now() - cached.timestamp < ADMIN_CHECK_CACHE_TTL) {
+          return cached.isAdmin
+        }
+        
         const decodedSender = conn.decodeJid(senderId)
-        return groupMetadata?.participants?.some(p =>
+        const isAdmin = participants.some(p =>
           (conn.decodeJid(p.id) === decodedSender || p.jid === decodedSender) &&
           (p.admin === 'admin' || p.admin === 'superadmin')
         ) || false
+        
+        // CACHE result
+        global.adminCheckCache.set(cacheKey, {
+          isAdmin,
+          timestamp: Date.now()
+        })
+        
+        return isAdmin
       } catch {
         return false
       }
     }
     
     const isRAdmin = user_participant?.admin == 'superadmin' || false
-    const isAdmin = m.isGroup ? await isUserAdmin(this, m.chat, m.sender) : false
-    const isBotAdmin = m.isGroup ? await isUserAdmin(this, m.chat, this.user.jid) : false
+    const isAdmin = m.isGroup && participants.length > 0 ? isUserAdminSync(this, participants, m.sender) : false
+    const isBotAdmin = m.isGroup && participants.length > 0 ? isUserAdminSync(this, participants, this.user.jid) : false
     
-    m.isAdmin = isAdmin
+    m.isAdmin = isAdmin || isOwner
     m.isBotAdmin = isBotAdmin
     
     const ___dirname = path.join(path.dirname(fileURLToPath(import.meta.url)), './plugins')
     
-    // ==================== PLUGIN.ALL ====================
-    for (let name in global.plugins) {
-      let plugin = global.plugins[name]
-      if (!plugin || plugin.disabled) continue
-      
-      if (typeof plugin.all === 'function') {
-        try {
-          await plugin.all.call(this, m, {
-            chatUpdate,
-            __dirname: ___dirname,
-            __filename: join(___dirname, name)
-          })
-        } catch (e) {
-          console.error(`[plugin.all] ${name}:`, e)
+    // ==================== PLUGIN.ALL (SKIP) ====================
+    if (isCommand) {
+      for (let name in global.plugins) {
+        let plugin = global.plugins[name]
+        if (!plugin || plugin.disabled) continue
+        
+        if (typeof plugin.all === 'function') {
+          try {
+            await plugin.all.call(this, m, {
+              chatUpdate,
+              __dirname: ___dirname,
+              __filename: join(___dirname, name)
+            })
+          } catch (e) {
+            console.error(`[plugin.all] ${name}:`, e.message)
+          }
         }
       }
     }
@@ -205,7 +300,7 @@ async function processMessage(m, chatUpdate) {
             user: user_participant,
             bot,
             isOwner,
-            isAdmin,
+            isAdmin: m.isAdmin,
             isBotAdmin,
             chatUpdate,
             __dirname: ___dirname,
@@ -213,9 +308,15 @@ async function processMessage(m, chatUpdate) {
           })
           if (shouldContinue === false) return
         } catch (e) {
-          console.error(`[plugin.before] ${name}:`, e)
+          console.error(`[plugin.before] ${name}:`, e.message)
         }
       }
+    }
+    
+    // Skip se non comando
+    if (!isCommand) {
+      if (user) user.messages = (user.messages || 0) + 1
+      return
     }
     
     // ==================== PLUGIN COMMANDS ====================
@@ -264,10 +365,6 @@ async function processMessage(m, chatUpdate) {
       
       m.plugin = name
       
-      // Check ban
-      if (chat?.isBanned && !isOwner) return
-      if (user?.banned && !isOwner) return
-      
       // Check permessi
       if (plugin.owner && !isOwner) {
         fail('owner', m, this)
@@ -281,7 +378,7 @@ async function processMessage(m, chatUpdate) {
         fail('botAdmin', m, this)
         continue
       }
-      if (plugin.admin && !isAdmin && !isOwner) {
+      if (plugin.admin && !m.isAdmin) {
         fail('admin', m, this)
         continue
       }
@@ -309,7 +406,7 @@ async function processMessage(m, chatUpdate) {
         user: user_participant,
         bot,
         isOwner,
-        isAdmin,
+        isAdmin: m.isAdmin,
         isBotAdmin,
         chatUpdate,
         __dirname: ___dirname,
@@ -320,27 +417,24 @@ async function processMessage(m, chatUpdate) {
         await plugin.call(this, m, extra)
       } catch (e) {
         m.error = e
-        console.error(`[plugin] ${name}:`, e)
-        if (e) {
-          let textErr = format(e)
-          await m.reply(textErr).catch(() => {})
-        }
+        console.error(`[plugin] ${name}:`, e.message)
+        await m.reply(`❌ Errore: ${e.message}`).catch(() => {})
       } finally {
         if (typeof plugin.after === 'function') {
           try {
             await plugin.after.call(this, m, extra)
           } catch (e) {
-            console.error(`[plugin.after] ${name}:`, e)
+            console.error(`[plugin.after] ${name}:`, e.message)
           }
         }
       }
       break
     }
   } catch (e) {
-    console.error('[handler]', e)
+    console.error('[handler]', e.message)
   } finally {
-    // Update stats
-    if (m?.sender) {
+    // Stats update
+    if (m?.sender && m.isCommand) {
       let user = global.db.data.users[m.sender]
       if (user) {
         user.exp = (user.exp || 0) + m.exp
@@ -368,33 +462,45 @@ async function processMessage(m, chatUpdate) {
       }
     }
     
-    // Print console
-    try {
-      if (!global.opts?.['noprint']) {
-        await (await import('./lib/print.js')).default(m, this)
-      }
-    } catch (e) {}
+    // Trigger DB save (throttled)
+    if (global.triggerDBSave) {
+      global.triggerDBSave()
+    }
     
-    // Autoread
+    // Print NON-BLOCKING
+    if (m.isCommand && !global.opts?.['noprint']) {
+      setImmediate(async () => {
+        try {
+          await (await import('./lib/print.js')).default(m, this)
+        } catch {}
+      })
+    }
+    
+    // Autoread NON-BLOCKING
     if (global.opts?.['autoread']) {
-      await this.readMessages([m.key]).catch(() => {})
+      setImmediate(() => this.readMessages([m.key]).catch(() => {}))
     }
   }
 }
 
-// ==================== PARTICIPANTS UPDATE ====================
+// ==================== PARTICIPANTS UPDATE VELOCE ====================
 export async function participantsUpdate({ id, participants, action }) {
   if (global.opts?.['self']) return
   if (this.isInit) return
   if (!global.db?.data) await global.loadDatabase()
   
   let chat = global.db.data.chats[id] || {}
+  
+  if ((action === 'add' || action === 'remove') && !chat.welcome) return
+  if ((action === 'promote' || action === 'demote') && !chat.detect) return
+  
   let nomeDelBot = 'SafeGuard Bot'
   let jidCanale = '120363259442839354@newsletter'
   
   try {
-    // Invalida cache gruppo
+    // INVALIDA CACHE IMMEDIATAMENTE
     global.groupMetaCache.delete(id)
+    global.adminCheckCache.delete(`${id}:${participants[0]}`)
     
     const groupMetadata = await this.groupMetadata(id).catch(() => null) || {}
     if (groupMetadata) {
@@ -407,83 +513,93 @@ export async function participantsUpdate({ id, participants, action }) {
     switch (action) {
       case 'add':
       case 'remove':
-        if (chat.welcome) {
-          for (let user of participants) {
-            let pp = './media/menu/default.jpg'
-            try {
-              pp = await this.profilePictureUrl(user, 'image')
-            } catch {}
-            
-            let apii = await this.getFile(pp).catch(() => ({ data: null }))
-            let text = ''
-            
-            if (action === 'add') {
-              text = (chat.sWelcome || '👋 Benvenuto/a, @user!')
-                .replace('@subject', await this.getName(id).catch(() => 'Gruppo'))
-                .replace('@desc', groupMetadata.desc?.toString() || 'Nessuna descrizione')
-                .replace('@user', '@' + user.split('@')[0])
-            } else {
-              text = (chat.sBye || '👋 Addio, @user!')
-                .replace('@user', '@' + user.split('@')[0])
-            }
-            
-            await this.sendMessage(id, {
-              text: text,
-              contextInfo: {
-                mentionedJid: [user],
-                forwardingScore: 99,
-                isForwarded: true,
-                forwardedNewsletterMessageInfo: {
-                  newsletterJid: jidCanale,
-                  serverMessageId: '',
-                  newsletterName: nomeDelBot
-                },
-                externalAdReply: {
-                  title: action === 'add' ? '👋 Benvenuto' : '👋 Addio',
-                  body: '',
-                  previewType: 'PHOTO',
-                  thumbnailUrl: '',
-                  thumbnail: apii.data,
-                  mediaType: 1,
-                  renderLargerThumbnail: false
-                }
-              }
-            }).catch(() => {})
+        for (let user of participants) {
+          let pp = './media/menu/default.jpg'
+          try {
+            pp = await this.profilePictureUrl(user, 'image')
+          } catch {}
+          
+          let apii = await this.getFile(pp).catch(() => ({ data: null }))
+          let text = ''
+          
+          if (action === 'add') {
+            text = (chat.sWelcome || '👋 Benvenuto/a, @user!')
+              .replace('@subject', groupMetadata.subject || 'Gruppo')
+              .replace('@desc', groupMetadata.desc?.toString() || 'Nessuna descrizione')
+              .replace('@user', '@' + user.split('@')[0])
+          } else {
+            text = (chat.sBye || '👋 Addio, @user!')
+              .replace('@user', '@' + user.split('@')[0])
           }
+          
+          await this.sendMessage(id, {
+            text: text,
+            contextInfo: {
+              mentionedJid: [user],
+              forwardingScore: 99,
+              isForwarded: true,
+              forwardedNewsletterMessageInfo: {
+                newsletterJid: jidCanale,
+                serverMessageId: '',
+                newsletterName: nomeDelBot
+              },
+              externalAdReply: {
+                title: action === 'add' ? '👋 Benvenuto' : '👋 Addio',
+                body: '',
+                previewType: 'PHOTO',
+                thumbnailUrl: '',
+                thumbnail: apii.data,
+                mediaType: 1,
+                renderLargerThumbnail: false
+              }
+            }
+          }).catch(() => {})
         }
         break
       
       case 'promote':
       case 'demote':
-        if (chat.detect) {
-          for (let user of participants) {
-            let text = ''
-            
-            if (action === 'promote') {
-              text = (chat.sPromote || '👑 @user è stato promosso ad amministratore')
-                .replace('@user', '@' + user.split('@')[0])
-            } else {
-              text = (chat.sDemote || '📉 @user non è più amministratore')
-                .replace('@user', '@' + user.split('@')[0])
-            }
-            
-            if (text) {
-              await this.sendMessage(id, {
-                text: text,
-                contextInfo: {
-                  mentionedJid: [user]
-                }
-              }).catch(() => {})
-            }
+        // INVALIDA CACHE ADMIN PER TUTTI I PARTICIPANTS
+        for (let user of participants) {
+          global.adminCheckCache.delete(`${id}:${user}`)
+        }
+        
+        for (let user of participants) {
+          let text = ''
+          
+          if (action === 'promote') {
+            text = (chat.sPromote || '👑 @user è stato promosso ad amministratore')
+              .replace('@user', '@' + user.split('@')[0])
+          } else {
+            text = (chat.sDemote || '📉 @user non è più amministratore')
+              .replace('@user', '@' + user.split('@')[0])
           }
           
-          await delay(1000)
-          global.groupMetaCache.delete(id)
+          if (text) {
+            await this.sendMessage(id, {
+              text: text,
+              contextInfo: {
+                mentionedJid: [user]
+              }
+            }).catch(() => {})
+          }
         }
+        
+        // Reload metadata dopo 1s
+        await delay(1000)
+        global.groupMetaCache.delete(id)
+        
+        try {
+          const updatedMetadata = await this.groupMetadata(id)
+          global.groupMetaCache.set(id, {
+            data: updatedMetadata,
+            timestamp: Date.now()
+          })
+        } catch {}
         break
     }
   } catch (e) {
-    console.error('[participantsUpdate]', e)
+    console.error('[participantsUpdate]', e.message)
   }
 }
 
@@ -514,7 +630,6 @@ export async function groupsUpdate(groupsUpdate) {
   }
 }
 
-// ==================== DFAIL ====================
 global.dfail = (type, m, conn) => {
   const msg = {
     owner: 'ㅤㅤ⋆｡˚『 🛡️ ╭ `PERMESSO NEGATO` ╯ 』˚｡⋆\n\n『 ⚠️ 』Questo comando è riservato agli *owner* del bot\n\n> Solo i proprietari possono eseguire questa azione',

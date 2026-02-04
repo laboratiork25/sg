@@ -41,11 +41,11 @@ Ciao *${m.pushName || 'Admin'}*! ✨ questi sono i comandi!
 • status → _Mostra stato_
 
 *Funzioni disponibili:*
-✦ welcome - Benvenuto/Addio
-✦ antilink - Blocca link WA
-✦ antilink2 - Blocca tutti i link
-✦ antimedia - Permette solo 1 visual
-✦ antispam - Blocca spam!
+${chat.welcome ? '✅' : '❌'} welcome - Benvenuto/Addio
+${chat.antilink ? '✅' : '❌'} antilink - Blocca link WA
+${chat.antilink2 ? '✅' : '❌'} antilink2 - Blocca tutti i link
+${chat.antispam ? '✅' : '❌'} antispam - Blocca spam
+${chat.antimedia ? '✅' : '❌'} antimedia - Permette solo 1 visual
 
 ─── ⋆⋅☆⋅⋆ ───
 *⚙️ CONFIGURAZIONE*
@@ -75,29 +75,10 @@ Ciao *${m.pushName || 'Admin'}*! ✨ questi sono i comandi!
       imageBuffer = null
     }
     
-    // Messaggio con bottoni
+    // Messaggio SENZA bottoni
     const message = {
       image: imageBuffer,
-      caption: menuText,
-      footer: 'SafeGuard Bot by ChatUnity',
-      buttons: [
-        {
-          buttonId: `${usedPrefix}status`,
-          buttonText: { displayText: '🛡️ Stato Protezioni' },
-          type: 1
-        },
-        {
-          buttonId: `${usedPrefix}canale`,
-          buttonText: { displayText: '📢 Canale ChatUnity' },
-          type: 1
-        },
-        {
-          buttonId: `${usedPrefix}supporto`,
-          buttonText: { displayText: '💬 Supporto' },
-          type: 1
-        }
-      ],
-      headerType: 4
+      caption: menuText
     }
     
     await conn.sendMessage(m.chat, message, { quoted: m })
@@ -131,23 +112,22 @@ on, off, status
 
 
 *Funzioni:*
-welcome, antilink, antispam, antitoxic, antiporno, detect, autosticker
-
+${chat.welcome ? '✅' : '❌'} welcome
+${chat.antilink ? '✅' : '❌'} antilink
+${chat.antispam ? '✅' : '❌'} antispam
+${chat.antitoxic ? '✅' : '❌'} antitoxic
 
 *⚙️ Config*
 setwelcome, setbye, regole, link
 
-
 *👤 Utenti*
 admins, link
-
 
 🌐 chatunity.it
 📢 whatsapp.com/channel/0029VakH1mu35fM0VqOZWC0W
 
-
 _Sviluppato da ChatUnity ♡_`
-    
+
     try {
       const imageBuffer = fs.readFileSync('./media/safeguard.jpeg')
       await conn.sendMessage(m.chat, {

@@ -35,15 +35,12 @@ const handler = async (m, { conn, participants, groupMetadata, args, isOwner, is
     }, { quoted: m });
 };
 
-// Inizializza la mappa per i cooldown
 handler.cooldowns = new Map();
-
 handler.help = ['admins <testo>'];
 handler.tags = ['gruppo'];
 handler.command = /^(admins|@admins|admin)$/i;
 handler.group = true;
 
-// Aggiungi la proprietà 'cooldown' al gestore
 handler.cooldown = 18 * 60 * 60 * 1000; // 18 ore
 
 export default handler;

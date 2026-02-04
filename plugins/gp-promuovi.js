@@ -140,7 +140,7 @@ const handler = async (m, { conn, usedPrefix, text, isAdmin, isOwner, isBotAdmin
       throw lastError || new Error('Impossibile promuovere utente')
     }
     
-    // Messaggio conferma
+
     const displayNumber = targetParticipant.id.split('@')[0]
     await conn.sendMessage(m.chat, {
       text: `ㅤㅤ⋆｡˚『 👑 ╭ \`PROMOZIONE\` ╯ 』˚｡⋆\n\n『 👤 』@${displayNumber}\n『 💬 』${fraseRandom}\n\n> Promosso ad amministratore`.trim(),

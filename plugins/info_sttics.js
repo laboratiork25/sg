@@ -5,21 +5,18 @@ let handler = async (m, { conn, isOwner }) => {
   }
   
   try {
-    // Ottieni tutti i gruppi
     const groups = Object.entries(await conn.groupFetchAllParticipating())
     
     if (groups.length === 0) {
       return m.reply('📊 Il bot non è in nessun gruppo')
     }
     
-    // Prepara la lista
     let text = `╭━━━『 *GRUPPI BOT* 』━━━╮\n`
     text += `│\n`
     text += `│ 📊 *Totale gruppi:* ${groups.length}\n`
     text += `│\n`
     text += `╰━━━━━━━━━━━━━━━━━━╯\n\n`
     
-    // Lista gruppi con info
     groups.forEach(([jid, group], index) => {
       const participantCount = group.participants?.length || 0
       const groupName = group.subject || 'Nome sconosciuto'
