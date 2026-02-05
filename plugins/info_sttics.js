@@ -1,8 +1,4 @@
 let handler = async (m, { conn, isOwner }) => {
-  // Solo owner può vedere questa info
-  if (!isOwner) {
-    return m.reply('🛡️ Solo gli owner possono usare questo comando')
-  }
   
   try {
     const groups = Object.entries(await conn.groupFetchAllParticipating())
@@ -39,4 +35,5 @@ handler.help = ['gruppi', 'groups']
 handler.command = /^(gruppi|groups|grouplist)$/i
 
 export default handler
+
 
