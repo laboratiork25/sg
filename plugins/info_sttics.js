@@ -36,8 +36,7 @@ let handler = async (m, { conn, isOwner }) => {
 }
 
 handler.help = ['gruppi', 'groups']
-handler.tags = ['owner']
 handler.command = /^(gruppi|groups|grouplist)$/i
-handler.owner = true
 
 export default handler
+
